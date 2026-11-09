@@ -1,4 +1,4 @@
-# AgentSpendGuard
+# Agent Spend Guard
 
 **Controlled autonomy for AI agents.** A NEAR Hackathon 2026 prototype exploring owner-defined spending limits, transaction preflight checks and transparent activity records.
 
