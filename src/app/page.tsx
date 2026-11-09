@@ -1,0 +1,13 @@
+import Link from "next/link";
+import { ShieldCheck, Bot, ArrowRight, LockKeyhole } from "lucide-react";
+
+export default function Home() {
+  return <main className="min-h-screen px-6 py-10 md:px-12">
+    <nav className="mx-auto flex max-w-6xl items-center justify-between"><div className="flex items-center gap-2 font-bold"><ShieldCheck className="text-emerald-400"/> AgentSpendGuard</div><span className="pill bg-amber-400/10 text-amber-300">DEMO MODE</span></nav>
+    <section className="mx-auto grid max-w-6xl gap-12 py-24 md:grid-cols-2 md:items-center">
+      <div><p className="mb-4 text-sm font-semibold uppercase tracking-[.2em] text-emerald-400">Controlled autonomy for AI agents</p><h1 className="text-5xl font-bold leading-tight md:text-6xl">Give agents room to act. <span className="text-emerald-400">Keep control.</span></h1><p className="mt-6 max-w-xl text-lg leading-8 text-slate-400">AgentSpendGuard is a prototype for owner-defined spending rules, transaction preflight checks and transparent activity records.</p><Link href="/dashboard" className="mt-8 inline-flex items-center gap-2 rounded-xl bg-emerald-400 px-5 py-3 font-bold text-slate-950">Open demo dashboard <ArrowRight size={18}/></Link><p className="mt-4 text-xs text-slate-500">This demo does not connect a wallet or move real funds.</p></div>
+      <div className="panel p-7"><div className="flex items-center justify-between"><div className="flex items-center gap-3"><div className="rounded-xl bg-emerald-400/10 p-3 text-emerald-400"><Bot/></div><div><p className="font-bold">Spending policy</p><p className="text-sm text-slate-400">Demo agent · merchant payments</p></div></div><span className="pill bg-emerald-400/10 text-emerald-300">ACTIVE DEMO</span></div><div className="mt-8 grid grid-cols-2 gap-4"><div className="rounded-xl bg-slate-900 p-4"><p className="text-sm text-slate-400">Daily limit</p><p className="mt-2 text-3xl font-bold">5.00 <small className="text-sm">USDC</small></p></div><div className="rounded-xl bg-slate-900 p-4"><p className="text-sm text-slate-400">Per payment</p><p className="mt-2 text-3xl font-bold">3.00 <small className="text-sm">USDC</small></p></div></div><div className="mt-5 flex items-center gap-3 rounded-xl border border-slate-700 p-4"><LockKeyhole className="text-emerald-400"/><div><p className="text-sm font-semibold">Policy checks before execution</p><p className="text-xs text-slate-400">Local prototype only · no blockchain authorization</p></div></div></div>
+    </section>
+    <footer className="mx-auto max-w-6xl border-t border-slate-800 pt-6 text-xs text-slate-500">Independent hackathon prototype. NEAR Protocol is not represented as endorsing this project.</footer>
+  </main>;
+}
