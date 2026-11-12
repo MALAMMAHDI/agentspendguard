@@ -19,6 +19,24 @@
 - Git and a GitHub account.
 - Visual Studio Code.
 
+## Database setup
+
+AgentSpendGuard uses Neon PostgreSQL to persist demo transaction activity.
+
+1. Copy `.env.example` to `.env.local`.
+2. Add your Neon PostgreSQL connection string as `DATABASE_URL`.
+3. Initialize the database:
+
+```bash
+node --env-file=.env.local scripts/setup-neon.mjs
+```
+
+This creates the `ags_demo_state` and `ags_demo_entries` tables and the `ags_submit_demo_proposal()` database function.
+
+**Current limitation:** The ledger uses one shared demo state across users. It is not isolated per user or agent and does not authorize or execute on-chain transactions. Daily accounting resets on the UTC day boundary.
+
+Never commit `.env.local` or expose database credentials.
+
 ## Run locally
 
 1. Extract this ZIP.
