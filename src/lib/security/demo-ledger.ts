@@ -1,11 +1,6 @@
-
-import { randomUUID } from "node:crypto";
+import { neon } from "@neondatabase/serverless";
 import { demoPolicy } from "./demo-data";
-import {
-  evaluateProposal,
-  type Evaluation,
-  type TransactionProposal,
-} from "./policy";
+import type { Evaluation, TransactionProposal } from "./policy";
 
 export type DemoLedgerEntry = {
   id: string;
@@ -19,117 +14,189 @@ export type DemoLedgerEntry = {
   day: string;
 };
 
-type LedgerState = {
-  day: string;
-  spentToday: number;
-  transactionsToday: number;
-  entries: DemoLedgerEntry[];
-  queue: Promise<void>;
-};
+export type SqlTag = (
+  strings: TemplateStringsArray,
+  ...values: unknown[]
+) => Promise<Record<string, unknown>[]>;
 
-const globalLedger = globalThis as typeof globalThis & {
-  __agentSpendGuardLedger?: LedgerState;
-};
+let cachedSql: SqlTag | undefined;
 
-function todayUtc(): string {
-  return new Date().toISOString().slice(0, 10);
-}
-
-function getLedger(): LedgerState {
-  if (!globalLedger.__agentSpendGuardLedger) {
-    globalLedger.__agentSpendGuardLedger = {
-      day: todayUtc(),
-      spentToday: 0,
-      transactionsToday: 0,
-      entries: [],
-      queue: Promise.resolve(),
-    };
+function getSql(): SqlTag {
+  if (!process.env.DATABASE_URL) {
+    throw new Error("DATABASE_URL is not configured");
   }
 
-  return globalLedger.__agentSpendGuardLedger;
-}
-
-async function withLedgerLock<T>(operation: () => T): Promise<T> {
-  const ledger = getLedger();
-
-  let release!: () => void;
-  const previous = ledger.queue;
-
-  ledger.queue = new Promise<void>((resolve) => {
-    release = resolve;
-  });
-
-  await previous;
-
-  try {
-    return operation();
-  } finally {
-    release();
+  if (!cachedSql) {
+    cachedSql = neon(process.env.DATABASE_URL) as unknown as SqlTag;
   }
+
+  return cachedSql;
 }
 
-function refreshDailyAccounting(ledger: LedgerState): void {
-  const currentDay = todayUtc();
+function asNumber(value: unknown): number {
+  const number = Number(value);
 
-  if (ledger.day !== currentDay) {
-    ledger.day = currentDay;
-    ledger.spentToday = 0;
-    ledger.transactionsToday = 0;
+  if (!Number.isSafeInteger(number)) {
+    throw new Error("Invalid numeric value returned by Neon");
   }
+
+  return number;
 }
 
-export async function submitDemoProposal(
-  proposal: TransactionProposal
-): Promise<Evaluation & { entry: DemoLedgerEntry }> {
-  return withLedgerLock(() => {
-    const ledger = getLedger();
-    refreshDailyAccounting(ledger);
+function asObject(value: unknown): Record<string, unknown> {
+  const parsed =
+    typeof value === "string" ? JSON.parse(value) as unknown : value;
 
-    const result = evaluateProposal({
-      proposal,
-      policy: demoPolicy,
-      spentToday: ledger.spentToday,
-      transactionsToday: ledger.transactionsToday,
-    });
+  if (!parsed || typeof parsed !== "object" || Array.isArray(parsed)) {
+    throw new Error("Invalid database response");
+  }
 
-    if (result.approved) {
-      ledger.spentToday += proposal.amount;
-      ledger.transactionsToday += 1;
-    }
-
-    const entry: DemoLedgerEntry = {
-      id: randomUUID(),
-      amount: proposal.amount,
-      asset: proposal.asset,
-      recipient: proposal.recipient,
-      status: result.approved ? "APPROVED" : "REJECTED",
-      reason: result.reason,
-      remainingDailyBudget: result.remainingDailyBudget,
-      createdAt: new Date().toISOString(),
-      day: ledger.day,
-    };
-
-    ledger.entries.unshift(entry);
-    ledger.entries = ledger.entries.slice(0, 100);
-
-    return { ...result, entry };
-  });
+  return parsed as Record<string, unknown>;
 }
 
-export async function getDemoLedgerSnapshot() {
-  return withLedgerLock(() => {
-    const ledger = getLedger();
-    refreshDailyAccounting(ledger);
+function asEntry(value: unknown): DemoLedgerEntry {
+  const entry = asObject(value);
 
-    return {
-      day: ledger.day,
-      spentToday: ledger.spentToday,
-      transactionsToday: ledger.transactionsToday,
-      remainingDailyBudget: Math.max(
-        0,
-        demoPolicy.dailyLimit - ledger.spentToday
-      ),
-      entries: [...ledger.entries],
-    };
-  });
+  if (entry.status !== "APPROVED" && entry.status !== "REJECTED") {
+    throw new Error("Invalid transaction status returned by Neon");
+  }
+
+  return {
+    id: String(entry.id),
+    amount: asNumber(entry.amount),
+    asset: String(entry.asset),
+    recipient: String(entry.recipient),
+    status: entry.status,
+    reason: String(entry.reason),
+    remainingDailyBudget: asNumber(entry.remainingDailyBudget),
+    createdAt: String(entry.createdAt),
+    day: String(entry.day),
+  };
 }
+
+function parseEntries(value: unknown): DemoLedgerEntry[] {
+  const parsed =
+    typeof value === "string" ? JSON.parse(value) as unknown : value;
+
+  if (!Array.isArray(parsed)) {
+    throw new Error("Invalid transaction history returned by Neon");
+  }
+
+  return parsed.map(asEntry);
+}
+
+export function createDemoLedger(getDatabase: () => SqlTag) {
+  return {
+    async submitDemoProposal(
+      proposal: TransactionProposal
+    ): Promise<Evaluation & { entry: DemoLedgerEntry }> {
+      const sql = getDatabase();
+
+      const rows = await sql`
+        SELECT ags_submit_demo_proposal(
+          ${proposal.amount}::bigint,
+          ${proposal.asset}::text,
+          ${proposal.recipient}::text,
+          ${demoPolicy.dailyLimit}::bigint,
+          ${demoPolicy.perTransactionLimit}::bigint,
+          ARRAY(
+            SELECT jsonb_array_elements_text(
+              ${JSON.stringify(demoPolicy.allowedAssets)}::jsonb
+            )
+          ),
+          ARRAY(
+            SELECT jsonb_array_elements_text(
+              ${JSON.stringify(demoPolicy.allowedRecipients)}::jsonb
+            )
+          ),
+          ${demoPolicy.maxTransactionsPerDay}::integer
+        ) AS result
+      `;
+
+      if (!rows[0]?.result) {
+        throw new Error("Neon did not return a proposal decision");
+      }
+
+      const result = asObject(rows[0].result);
+
+      return {
+        approved: result.approved === true,
+        reason: String(result.reason),
+        remainingDailyBudget: asNumber(result.remainingDailyBudget),
+        entry: asEntry(result.entry),
+      };
+    },
+
+    async getDemoLedgerSnapshot() {
+      const sql = getDatabase();
+
+      // Reset daily accounting when the UTC day changes.
+      await sql`
+        UPDATE ags_demo_state
+        SET accounting_day = (now() AT TIME ZONE 'UTC')::date,
+            spent_today = 0,
+            transactions_today = 0,
+            updated_at = now()
+        WHERE id = 'demo'
+          AND accounting_day <> (now() AT TIME ZONE 'UTC')::date
+      `;
+
+      const rows = await sql`
+        SELECT
+          s.accounting_day::text AS day,
+          s.spent_today::text AS "spentToday",
+          s.transactions_today AS "transactionsToday",
+          GREATEST(
+            0,
+            ${demoPolicy.dailyLimit}::bigint - s.spent_today
+          )::text AS "remainingDailyBudget",
+          COALESCE(
+            (
+              SELECT jsonb_agg(
+                jsonb_build_object(
+                  'id', e.id,
+                  'amount', e.amount::text,
+                  'asset', e.asset,
+                  'recipient', e.recipient,
+                  'status', e.status,
+                  'reason', e.reason,
+                  'remainingDailyBudget', e.remaining_daily_budget::text,
+                  'createdAt', e.created_at,
+                  'day', e.accounting_day::text
+                )
+                ORDER BY e.created_at DESC
+              )
+              FROM (
+                SELECT *
+                FROM ags_demo_entries
+                ORDER BY created_at DESC
+                LIMIT 100
+              ) e
+            ),
+            '[]'::jsonb
+          ) AS entries
+        FROM ags_demo_state s
+        WHERE s.id = 'demo'
+      `;
+
+      if (!rows[0]) {
+        throw new Error("Neon demo ledger state is missing");
+      }
+
+      const row = rows[0];
+
+      return {
+        day: String(row.day),
+        spentToday: asNumber(row.spentToday),
+        transactionsToday: asNumber(row.transactionsToday),
+        remainingDailyBudget: asNumber(row.remainingDailyBudget),
+        entries: parseEntries(row.entries),
+      };
+    },
+  };
+}
+
+const ledger = createDemoLedger(getSql);
+
+export const submitDemoProposal = ledger.submitDemoProposal;
+export const getDemoLedgerSnapshot = ledger.getDemoLedgerSnapshot;
